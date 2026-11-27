@@ -5,6 +5,7 @@ import importlib.metadata
 import math
 import shutil
 import signal
+import sys
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -60,16 +61,43 @@ def environment_config(config):
 # Where a podman container reaches the machine it runs on: podman puts the name in every
 # container's /etc/hosts (the host's address; a server must listen there, not only on 127.0.0.1)
 PODMAN_HOST = "host.containers.internal"
+DOCKER_DESKTOP_HOST = "host.docker.internal"  # the Mac, from a Docker Desktop container
+
+
+def container_host(backend):
+    """The name a container of `backend` reaches this machine by, or None where `localhost`
+    cannot be rewritten (docker on Linux shares no such name by default)."""
+    if backend == "podman":
+        return PODMAN_HOST
+    if backend == "docker" and sys.platform == "darwin":
+        return DOCKER_DESKTOP_HOST
+    return None
 
 
 def agent_url(url, backend):
     """`url` as an agent's container reaches it: with podman, `localhost` (this machine) is
-    PODMAN_HOST. Other URLs, and other backends, as written."""
-    if backend != "podman" or not loopback_url(url):
+    PODMAN_HOST; with Docker Desktop on macOS, DOCKER_DESKTOP_HOST. Other URLs, and other
+    backends, as written."""
+    host = container_host(backend)
+    if host is None or not loopback_url(url):
         return url
     parts = urlsplit(url)
     port = f":{parts.port}" if parts.port else ""
-    return urlunsplit(parts._replace(netloc=PODMAN_HOST + port))
+    return urlunsplit(parts._replace(netloc=host + port))
+
+
+def localize_resources(trial_config, backend):
+    """After the resources bound an agent: their `*_URL` variables that name this machine, as
+    the agent's container reaches it (agent_url), and that host allowed."""
+    host = container_host(backend)
+    if host is None:
+        return
+    env = trial_config.agent.env
+    for name, value in list(env.items()):
+        if name.endswith("_URL") and isinstance(value, str) and loopback_url(value):
+            env[name] = agent_url(value, backend)
+            if host not in trial_config.agent.extra_allowed_hosts:
+                trial_config.agent.extra_allowed_hosts.append(host)
 
 
 def build_trial_config(

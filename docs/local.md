@@ -191,4 +191,4 @@ A worker process that exits is noticed on the next reconcile pass and relaunched
 `compute.crash_backoff` (2 s locally; docs/live.md "Worker liveness").
 
 Known gaps: `limits.budget_usd` is the only spec limit that stops a run (`alive` and
-`spawned_total` limit spawning, as on jobs); tested on Linux, not yet on macOS; Windows is not supported (process groups).
+`spawned_total` limit spawning, as on jobs); tested on Linux; on macOS with Docker Desktop (container networks avoid the Mac's routes, and `localhost` URLs reach agents as `host.docker.internal`); Windows is not supported (process groups).
