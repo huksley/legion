@@ -375,6 +375,30 @@ How the key travels: `Authorization: Bearer <key>`. Controller secrets to set: e
 jobs. A Trial's environment is the task's plus the inference key, the
 tools and the resources; `LEGION_TOKEN` and the workers' `HF_TOKEN` stay in the worker.
 
+## Harnesses
+
+A Harbor spec's `harness` picks the agent in each Trial: `pi` (the default) or `opencode`.
+Both run one turn per prompt in the agent's long-lived Trial (`legion.harbor.agent.TurnServer`)
+and take the same `inference` block:
+
+```yaml
+harness: opencode
+model: deepseek-4-1-flash-1017
+inference:
+  urls: [https://inference.example.com/v1]
+  api_key_env: EXAMPLE_API_KEY
+  context_window: 131072
+```
+
+OpenCode (`legion.harbor.harnesses.opencode`) runs `opencode run --format=json` per turn, and
+`--continue` after the first. Harbor installs the pinned `opencode-ai` release
+(`OPENCODE_VERSION`) in the task's container. The model is registered under one generated
+OpenAI-compatible provider, `legion`, with the block's base URL, key and context window
+(`limit.context`, so OpenCode compacts before the server refuses a request). Its sessions are
+OpenCode's data dir, kept and restored like Pi's. Undo snapshots are off: a task's working
+directory is often `/`. Not supported yet with OpenCode: `limits.agent_max_turns` (the type's
+`turn_timeout` bounds a turn) and `inference.reasoning_effort`.
+
 ## Reasoning
 
 `inference.reasoning_effort` is Pi's `--thinking` level. Whether a server honours it is up to

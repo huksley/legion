@@ -313,6 +313,8 @@ def compile_spec(spec: Spec, task: dict, bundle=None, folders: str | None = None
         "task", "environment", "tools_dir", "tools", "resources_dir", "namespace", "success_check"})
     if spec.success_check is None:
         config.pop("success_check", None)
+    if spec.harness != "pi":  # the Trial's agent (legion.worker.adapters.harbor.AGENTS)
+        config["harness"] = spec.harness
     if spec.stop_on_success:
         config["stop_on_success"] = True
     config["limits"] = spec.limits.model_dump(

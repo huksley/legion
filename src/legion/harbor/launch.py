@@ -82,9 +82,20 @@ def build_trial_config(
     run = run_dir.name if run is None else run
     backend = config.environment.backend
     key_name = inference.key_env or NO_KEY_ENV
-    agent_kwargs = {"version": PI_VERSION, "max_turns": config.limits.agent_max_turns}
-    if inference.reasoning_effort is not None:
-        agent_kwargs["reasoning_effort"] = inference.reasoning_effort
+    # the id as the servers take it (`<model>:<provider>` on the router), unparsed
+    model_name = inference.request_model(config.model)
+    if config.harness == "opencode":
+        from .harnesses.opencode import OPENCODE_VERSION, PROVIDER
+
+        # OpenCode names a model `<provider>/<model>`: one generated OpenAI-compatible
+        # provider for the run's endpoint (legion.harbor.harnesses.opencode)
+        agent_name, model_name = "opencode", f"{PROVIDER}/{model_name}"
+        agent_kwargs = {"version": OPENCODE_VERSION}
+    else:
+        agent_name = "pi"
+        agent_kwargs = {"version": PI_VERSION, "max_turns": config.limits.agent_max_turns}
+        if inference.reasoning_effort is not None:
+            agent_kwargs["reasoning_effort"] = inference.reasoning_effort
     return TrialConfig(
         task=(
             TaskConfig(path=resolved.local_path)
@@ -97,10 +108,9 @@ def build_trial_config(
         trial_name=f"{run_dir.name}-{name}",
         trials_dir=run_dir / "trials",
         agent=AgentConfig(
-            name="pi",
+            name=agent_name,
             override_timeout_sec=config.limits.agent_timeout_seconds,
-            # the id as the servers take it (`<model>:<provider>` on the router), unparsed
-            model_name=inference.request_model(config.model),
+            model_name=model_name,
             skip_model_parsing=True,
             base_url=agent_url(inference.endpoint_for(run, name), backend),
             model_api_key_name=key_name,
@@ -223,7 +233,8 @@ async def _run_experiment(config: Config):
         result = None
         try:
             trial = await Trial.create(trial_config)
-            attach_pi_setup(trial, config.inference)
+            if config.harness == "pi":
+                attach_pi_setup(trial, config.inference)
             if config.tools:
                 attach_tool_setup(trial, bundle)
             result = await trial.run()

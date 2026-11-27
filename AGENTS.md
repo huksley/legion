@@ -8,7 +8,7 @@ casually: controller, worker and CLI all import it.
 - `src/legion/models.py` — shared pydantic contracts (spec, heartbeat, commands, API shapes).
 - `src/legion/controller/` — FastAPI app, SQLite store, reconcile loop, HF Jobs client, status page.
 - `src/legion/worker/` — worker loop, the `harbor` harness adapter (one Harbor Trial per agent), bucket sync.
-- `src/legion/harbor/` — the Harbor task path: spec compile, Trials, Pi, and the `message_board`, `world`, `spawn` resources and tools (builtin/).
+- `src/legion/harbor/` — the Harbor task path: spec compile, Trials, Pi and OpenCode (harnesses/), and the `message_board`, `world`, `spawn` resources and tools (builtin/).
 - `src/legion/comms/` — the controller's msgboard client and the board rules the board resource applies (docs/comms.md).
 - `src/legion/cli.py` — `legion` CLI (typer) over the controller API.
 - `experiments/` — Harbor experiments (`mini-swarm`, `escape-room`, `pybot`).

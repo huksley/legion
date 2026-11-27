@@ -145,7 +145,8 @@ class SuccessCheck(Settings):
 
 class Config(Settings):
     name: str = Field(default="pi-team", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-    harness: Literal["pi"] = "pi"
+    # the agent in each Trial: Pi, or OpenCode (legion.harbor.harnesses.opencode)
+    harness: Literal["pi", "opencode"] = "pi"
     success_check: SuccessCheck | None = None
     model: str = Field(min_length=1)
     inference: Inference = Field(default_factory=Inference)
@@ -209,14 +210,20 @@ class Config(Settings):
         return inference_key(self.inference)
 
     def check_model_connection(self, api_key):
+        from harbor.agents.installed.opencode import OpenCode
         from harbor.agents.installed.pi import Pi
 
         from legion.models import NO_KEY_ENV
 
         name = self.inference.key_env or NO_KEY_ENV
         environment = {**os.environ, name: api_key}
-        Pi.resolve_model_connection_config(
-            self.inference.request_model(self.model),
+        agent, model = Pi, self.inference.request_model(self.model)
+        if self.harness == "opencode":
+            from .harnesses.opencode import PROVIDER
+
+            agent, model = OpenCode, f"{PROVIDER}/{model}"
+        agent.resolve_model_connection_config(
+            model,
             lambda key, *others: next(
                 (
                     (name, environment[name])

@@ -9,7 +9,8 @@ progress and model usage.
 
 Run from a laptop, on Hugging Face Jobs, or through Slurm. Use Hugging Face
 Inference Providers or your own OpenAI-compatible model endpoint, and add tools
-as Python functions. Pi is currently the supported agent harness.
+as Python functions. Pi (the default) and OpenCode (`harness: opencode`,
+[docs/open-models.md](docs/open-models.md#harnesses)) are the supported agent harnesses.
 
 > [!WARNING]
 > Legion is at an early stage and changes quickly, so expect sharp edges. The
