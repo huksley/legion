@@ -676,3 +676,14 @@ async def test_participant_outcomes_determine_run_status(
     assert data["participants"][1]["status"] == "completed"
     assert data["participants"][1]["rewards"] == {"reward": 0}
     assert "test-inference-secret" not in (directory / "run.json").read_text()
+
+
+@pytest.mark.parametrize("backend,platform,expected", [
+    ("docker", "darwin", "http://host.docker.internal:8765"),  # Docker Desktop
+    ("docker", "linux", "http://127.0.0.1:8765"),  # no such name by default
+    ("podman", "linux", "http://host.containers.internal:8765"),
+])
+def test_this_machine_as_agent_containers_reach_it(monkeypatch, backend, platform, expected):
+    monkeypatch.setattr(launch.sys, "platform", platform)
+    assert launch.agent_url("http://127.0.0.1:8765", backend) == expected
+    assert launch.agent_url("https://example.com/v1", backend) == "https://example.com/v1"

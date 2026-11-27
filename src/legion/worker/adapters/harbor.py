@@ -365,6 +365,7 @@ class HarborAdapter:
                 await self.resources.remove([self.agent])
                 raise RuntimeError("agent closed")
             bound = self.resources.bind(self.agent, tc)
+            launch.localize_resources(tc, config.environment.backend)
             if tc.environment.mounts and config.environment.backend in SANDBOXES:
                 raise RuntimeError(f"{config.environment.backend} has no mounts: use the "
                                    "resources' http transport")

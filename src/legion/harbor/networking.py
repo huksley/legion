@@ -47,6 +47,26 @@ def candidate_subnets(routes):
     return [n for n in candidates if not any(n.overlaps(r) for r in occupied)]
 
 
+def darwin_routes(table):
+    """`netstat -rn -f inet` destinations as `ip -j route` entries ({"dst": "a.b.c.d/n"}):
+    macOS writes a network with its trailing zero octets left out ("10/8", "172.16",
+    "192.168.1") and a host without a prefix."""
+    routes = []
+    for line in table.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        destination, _, prefix = fields[0].partition("/")
+        octets = destination.split(".")
+        if not 1 <= len(octets) <= 4 or not all(o.isdigit() for o in octets):
+            continue
+        address = ".".join(octets + ["0"] * (4 - len(octets)))
+        bits = prefix or str(8 * len(octets))
+        with suppress(ValueError):
+            routes.append({"dst": str(ipaddress.ip_network(f"{address}/{bits}", strict=False))})
+    return routes
+
+
 class TrialNetworks:
     def __init__(self, run_id, engine="docker"):
         if engine not in ("docker", "podman"):
@@ -61,8 +81,16 @@ class TrialNetworks:
         remote = os.environ.get(
             "DOCKER_HOST" if self.engine == "docker" else "CONTAINER_HOST", "unix://"
         ).startswith(("tcp:", "ssh:"))
-        if sys.platform != "linux" or remote:
+        if remote or sys.platform not in ("linux", "darwin"):
             raise ValueError("This release requires a local Linux container engine")
+        if sys.platform == "darwin":
+            # Docker Desktop / podman machine: the engine's networks live in its Linux VM
+            # behind NAT; the Mac's own routes (a VPN's) are still kept clear of them.
+            code, stdout, stderr = await command("netstat", "-rn", "-f", "inet")
+            if code:
+                raise RuntimeError(f"Cannot inspect host/VPN routes: {stderr.strip()}")
+            self.candidates = candidate_subnets(darwin_routes(stdout))
+            return
         code, stdout, stderr = await command(
             "ip", "-j", "-4", "route", "show", "table", "all"
         )

@@ -102,3 +102,43 @@ async def test_podman_ignores_unrelated_docker_endpoint(monkeypatch):
     monkeypatch.setenv("CONTAINER_HOST", "ssh://remote-host")
     with pytest.raises(ValueError, match="local Linux"):
         await networking.TrialNetworks("remote", engine="podman").start()
+
+
+NETSTAT = """Routing tables
+
+Internet:
+Destination        Gateway            Flags               Netif Expire
+default            192.168.1.1        UGScg                 en0
+10/8               utun3              UGSc                utun3
+127                127.0.0.1          UCS                   lo0
+172.16             utun3              UGSc                utun3
+172.20.4/22        utun3              UGSc                utun3
+192.168.1          link#14            UCS                   en0
+192.168.1.1/32     link#14            UCS                   en0
+"""
+
+
+async def test_macos_keeps_container_networks_clear_of_its_routes(monkeypatch):
+    """Docker Desktop: the Mac's routes come from `netstat` (networks written without their
+    trailing zero octets), and no candidate overlaps them."""
+    assert networking.darwin_routes(NETSTAT) == [
+        {"dst": "10.0.0.0/8"}, {"dst": "127.0.0.0/8"}, {"dst": "172.16.0.0/16"},
+        {"dst": "172.20.4.0/22"}, {"dst": "192.168.1.0/24"}, {"dst": "192.168.1.1/32"}]
+    calls = []
+
+    async def command(*args):
+        calls.append(args)
+        return 0, NETSTAT, ""
+
+    monkeypatch.setattr(networking, "command", command)
+    monkeypatch.setattr(networking.sys, "platform", "darwin")
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    trial_networks = networking.TrialNetworks("mac")
+    await trial_networks.start()
+    assert calls == [("netstat", "-rn", "-f", "inet")]
+    for busy in ("172.16.0.0/16", "172.20.4.0/22"):
+        assert not any(n.overlaps(ipaddress.ip_network(busy))
+                       for n in trial_networks.candidates)
+    monkeypatch.setattr(networking.sys, "platform", "win32")
+    with pytest.raises(ValueError, match="local Linux"):
+        await networking.TrialNetworks("windows").start()
