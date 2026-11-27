@@ -7,7 +7,8 @@ other files in docs/.
 
 legion hosts agent swarms and keeps them running: it places agents on workers, prompts them,
 syncs their sessions and workdirs, restarts what fails and reports health and cost. Each agent
-is one long-lived Harbor Trial in which Harbor's Pi runs one turn per prompt. legion never
+is one long-lived Harbor Trial in which Harbor's Pi (or OpenCode, with `harness: opencode`)
+runs one turn per prompt. legion never
 decides what an agent should see: whoever calls `prompt` has decided that. Messaging belongs to
 [msgboard](https://github.com/huggingface/msgboard) (the `message_board` resource), shared
 state to a world (the `world` resource, docs/world.md).

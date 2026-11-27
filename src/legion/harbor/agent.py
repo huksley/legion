@@ -1,4 +1,6 @@
-"""LegionPi: Harbor's Pi as a turn server inside one long-lived Trial.
+"""LegionPi (and, in legion.harbor.harnesses.opencode, LegionOpenCode): a Harbor agent as a
+turn server inside one long-lived Trial. TurnServer holds the harness-neutral loop; a harness
+class gives it its output file, its session directory, how to read a turn and how to kill it.
 
 A HarborAdapter (legion.worker.adapters.harbor) selects it through
 AgentConfig(import_path="legion.harbor.agent:LegionPi") and sets `channel` after Trial.create.
@@ -43,18 +45,26 @@ MAX_ERRORS = 3  # failed turns in a row before the Trial ends
 SYNC = 600  # seconds between session downloads when /logs/agent is not mounted (hf-sandbox)
 PULL_WAIT = 15  # seconds pull_sessions() may take
 STOP_GRACE = 30  # seconds stop() waits for a killed turn to report
-# Ends `pi` and its tool processes without procps (absent from slim images): `pi --print`
-# command lines and their descendants (parent pids from /proc/*/stat, read before any kill so
-# none is reparented first). `[p]` keeps this shell's own command line from matching; it fails
-# when no `pi` matched.
-KILL_PI = (
-    "k=' '; t=; for d in /proc/[0-9]*; do p=${d#/proc/}; "
-    "read -r s 2>/dev/null < $d/stat || continue; s=${s##*) }; set -- $s; t=\"$t $p:$2\"; "
-    "case \"$(tr '\\0' ' ' 2>/dev/null < $d/cmdline)\" in *[p]'i --print'*) k=\"$k$p \";; esac; "
-    "done; [ \"$k\" != ' ' ] || exit 1; n=0; while [ $n != ${#k} ]; do n=${#k}; "
-    "for e in $t; do case \"$k\" in *\" ${e%:*} \"*) ;; *\" ${e#*:} \"*) k=\"$k${e%:*} \";; esac; "
-    "done; done; kill $k 2>/dev/null; true"
-)
+
+
+def kill_command(pattern):
+    """A shell script that ends the processes whose command line matches the `case` glob
+    `pattern`, and their descendants, without procps (absent from slim images): parent pids
+    from /proc/*/stat, read before any kill so none is reparented first. The pattern must keep
+    the script's own command line from matching (a `[x]` bracket); the script fails when no
+    process matched."""
+    return (
+        "k=' '; t=; for d in /proc/[0-9]*; do p=${d#/proc/}; "
+        "read -r s 2>/dev/null < $d/stat || continue; s=${s##*) }; set -- $s; t=\"$t $p:$2\"; "
+        "case \"$(tr '\\0' ' ' 2>/dev/null < $d/cmdline)\" in " + pattern + ") k=\"$k$p \";; esac; "
+        "done; [ \"$k\" != ' ' ] || exit 1; n=0; while [ $n != ${#k} ]; do n=${#k}; "
+        "for e in $t; do case \"$k\" in *\" ${e%:*} \"*) ;; *\" ${e#*:} \"*) k=\"$k${e%:*} \";; esac; "
+        "done; done; kill $k 2>/dev/null; true"
+    )
+
+
+# Ends `pi --print` and its tool processes.
+KILL_PI = kill_command("*[p]'i --print'*")
 
 
 @dataclass
@@ -105,33 +115,33 @@ def read_turn(path):
     return messages, usage
 
 
-class LegionPi(Pi):
+class TurnServer:
+    """The harness-neutral turn server, mixed in before a Harbor installed agent whose `run()`
+    makes one turn and continues the last session while `_resume` is set (Harbor's `resume()`).
+
+    A harness class sets `_OUTPUT_FILENAME` (the turn's output under the agent's logs dir),
+    `_SESSIONS_DIRECTORY` (its session state, relative to the logs dir), `_KILL` (a
+    `kill_command`) and `_LABEL`, and implements `_read_turn` and `_turn_error`."""
+
     channel: Channel  # set by the HarborAdapter after Trial.create
     why: str | None = None  # why run() returned: closed, trial_hours, errors, probe
     busy = False  # a turn is in flight
     _killed = False
     _env = None
+    _KILL: str
+    _LABEL = "agent"
 
-    def _build_custom_models_json(self, access, model_id):
-        """Harbor's models.json with the channel's endpoint: its base URL, the model's
-        `contextWindow` (Pi's default is 128000, more than many servers take) and the
-        provider's `headers`. A copy (no secret: the key is a `$NAME` reference) goes to the
-        Trial's agent dir, for the operator."""
-        models = super()._build_custom_models_json(access, model_id)
-        ch = getattr(self, "channel", None)
-        if models is None or ch is None:
-            return models
-        for provider in models["providers"].values():
-            if ch.base_url:
-                provider["baseUrl"] = ch.base_url
-            if ch.headers:
-                provider["headers"] = dict(ch.headers)
-            if ch.context_window:
-                for model in provider["models"]:
-                    model["contextWindow"] = ch.context_window
-        with suppress(OSError):
-            (self.logs_dir / "models.json").write_text(json.dumps(models, indent=2) + "\n")
-        return models
+    def _read_turn(self, output):
+        """(messages in Pi's message shape, TokenUsage) of one turn's output file."""
+        raise NotImplementedError
+
+    def _turn_error(self, output, max_turns):
+        """The harness's own terminal error in one turn's output file, or None."""
+        raise NotImplementedError
+
+    def _session_files(self, root):
+        """The session files under `root` (the logs dir's session directory) to keep."""
+        return root.glob("*.jsonl")
 
     async def run(self, instruction, environment, context):
         # resume() sets this private flag around run(); that call is one --continue turn.
@@ -237,9 +247,9 @@ class LegionPi(Pi):
                 await self._pull(environment, output)
             except Exception as exc:
                 ch.emit(AdapterEvent("error", error=f"session sync: {safe_error(exc)[:300]}"))
-            pi_error = terminal_pi_error(output, ch.max_turns)
-            error = pi_error or error  # Pi's own words first
-            messages, usage = read_turn(output)
+            pi_error = self._turn_error(output, ch.max_turns)
+            error = pi_error or error  # the harness's own words first
+            messages, usage = self._read_turn(output)
             for message in messages:
                 ch.emit(AdapterEvent("message", message=message))
             if usage != TokenUsage():
@@ -299,13 +309,15 @@ class LegionPi(Pi):
         them; also when the Trial ended (Harbor then downloaded /logs/agent)."""
         home = self.channel.home / "sessions"
         home.mkdir(parents=True, exist_ok=True)
-        for path in (self.logs_dir / self._SESSIONS_DIRECTORY).glob("*.jsonl"):
-            kept, now = home / path.name, path.stat()
+        root = self.logs_dir / self._SESSIONS_DIRECTORY
+        for path in self._session_files(root):
+            kept, now = home / path.relative_to(root), path.stat()
+            kept.parent.mkdir(parents=True, exist_ok=True)
             with suppress(FileNotFoundError):
                 old = kept.stat()
                 if (old.st_size, old.st_mtime_ns) == (now.st_size, now.st_mtime_ns):
                     continue  # unchanged since the last copy (copy2 keeps the mtime)
-            temporary = home / f".{path.name}.tmp"  # BucketSync never sees half a file
+            temporary = kept.parent / f".{path.name}.tmp"  # BucketSync never sees half a file
             shutil.copy2(path, temporary)
             os.replace(temporary, kept)
 
@@ -319,14 +331,47 @@ class LegionPi(Pi):
             await self.exec_as_root(environment, f"chown -R {user} {shlex.quote(target)}")
 
     async def kill(self):
-        """End the running `pi`; its turn ends `interrupted`. Unverified in a real container
+        """End the running harness process; its turn ends `interrupted`. Unverified in a real container
         (whether --continue works after it is untested). A failed kill is an `error` event."""
         if not self.busy or self._env is None:
             return
         self._killed = True
         try:
-            await self.exec_as_root(self._env, KILL_PI, timeout_sec=30)
+            await self.exec_as_root(self._env, self._KILL, timeout_sec=30)
         except Exception as exc:  # reported; the turn timeout still applies
-            self.channel.emit(AdapterEvent("error", error=f"kill pi: {safe_error(exc)[:300]}"))
+            self.channel.emit(AdapterEvent(
+                "error", error=f"kill {self._LABEL}: {safe_error(exc)[:300]}"))
         with suppress(TimeoutError):
             await asyncio.wait_for(self.idle.wait(), STOP_GRACE)
+
+
+class LegionPi(TurnServer, Pi):
+    _KILL = KILL_PI
+    _LABEL = "pi"
+
+    def _read_turn(self, output):
+        return read_turn(output)
+
+    def _turn_error(self, output, max_turns):
+        return terminal_pi_error(output, max_turns)
+
+    def _build_custom_models_json(self, access, model_id):
+        """Harbor's models.json with the channel's endpoint: its base URL, the model's
+        `contextWindow` (Pi's default is 128000, more than many servers take) and the
+        provider's `headers`. A copy (no secret: the key is a `$NAME` reference) goes to the
+        Trial's agent dir, for the operator."""
+        models = super()._build_custom_models_json(access, model_id)
+        ch = getattr(self, "channel", None)
+        if models is None or ch is None:
+            return models
+        for provider in models["providers"].values():
+            if ch.base_url:
+                provider["baseUrl"] = ch.base_url
+            if ch.headers:
+                provider["headers"] = dict(ch.headers)
+            if ch.context_window:
+                for model in provider["models"]:
+                    model["contextWindow"] = ch.context_window
+        with suppress(OSError):
+            (self.logs_dir / "models.json").write_text(json.dumps(models, indent=2) + "\n")
+        return models

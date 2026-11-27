@@ -51,6 +51,9 @@ CHECK_START = "\nLEGION_CHECK_START\n"
 CHECK_END = "\nLEGION_CHECK_END\n"
 
 CANCEL_WAIT = 60.0  # s close() waits for a cancelled Trial's environment to stop
+# the Harbor agent class of each `harness` of a Harbor spec (legion.harbor.config.Config)
+AGENTS = {"pi": "legion.harbor.agent:LegionPi",
+          "opencode": "legion.harbor.harnesses.opencode:LegionOpenCode"}
 
 
 class HarborAdapter:
@@ -85,9 +88,17 @@ class HarborAdapter:
         self._network_id = uuid.uuid4().hex[:8]  # names and labels this adapter's networks
 
     def session_files(self, session_id: str | None) -> list[Path]:
-        """Every Pi session file of the agent: one Pi session dir per agent, and `--continue`
-        takes up the newest."""
-        return sorted((self.home / "sessions").glob("*.jsonl"))
+        """Every session file of the agent: Pi's `*.jsonl` (one Pi session dir per agent, and
+        `--continue` takes up the newest), or OpenCode's data dir as a tree."""
+        sessions = self.home / "sessions"
+        if self._harness_name() == "opencode":
+            return sorted(p for p in sessions.rglob("*") if p.is_file()
+                          and not p.name.startswith("."))
+        return sorted(sessions.glob("*.jsonl"))
+
+    def _harness_name(self) -> str:
+        h = self.spec.harbor
+        return (h.config.get("harness") if h is not None else None) or "pi"
 
     def artifact_files(self) -> list[Path]:
         return [p for p in (self.home / "results").rglob("*") if p.is_file() and not p.is_symlink()]
@@ -332,7 +343,7 @@ class HarborAdapter:
         # alive; a worker relaunched in this run reuses, and so cleans up, its own names.
         # shortcut: two runs of one swarm name on one host still share names; add a run id then
         tc.trial_name = f"{swarm + '-' if swarm else ''}{self.agent}-t{self.attempt}"
-        tc.agent.name, tc.agent.import_path = None, "legion.harbor.agent:LegionPi"
+        tc.agent.name, tc.agent.import_path = None, AGENTS[config.harness]
         # LegionPi serves turns for trial_hours; its last turn may take a turn_timeout more
         tc.agent.override_timeout_sec = (
             trial_seconds + parse_duration(self.spec.turn_timeout).total_seconds())
@@ -380,7 +391,8 @@ class HarborAdapter:
             if self._closes:  # closed while this Trial was being created
                 await self._drop_network(networks)  # a close may have taken self._network
                 raise RuntimeError("agent closed")
-            launch.attach_pi_setup(trial, inference)
+            if config.harness == "pi":
+                launch.attach_pi_setup(trial, inference)
             if self.bundle is not None:
                 launch.attach_tool_setup(trial, self.bundle)
             channel = Channel(emit=self._emit, prompts=self._prompts, home=self.home,
